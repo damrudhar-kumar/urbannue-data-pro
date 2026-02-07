@@ -4,4 +4,5 @@ google-generativeai
 fastapi
 uvicorn
 ShopifyAPI
+python-dotenv
 supabase
