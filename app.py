@@ -3,6 +3,7 @@ import pandas as pd
 import google.generativeai as genai
 from supabase import create_client, Client
 import shopify
+import requests
 
 # 1. Page Configuration & Premium Styling
 st.set_page_config(page_title="Urbannue Pro | Intelligence", layout="wide")
@@ -24,20 +25,51 @@ st.markdown("""
 # 2. Secure Connection to Supabase Vault
 @st.cache_resource
 def init_supabase():
-    url = st.secrets["SUPABASE_URL"]
-    key = st.secrets["SUPABASE_KEY"]
-    return create_client(url, key)
+    return create_client(st.secrets["SUPABASE_URL"], st.secrets["SUPABASE_KEY"])
 
 supabase = init_supabase()
+
+def save_token(shop, token):
+    data = {"shop_url": shop, "access_token": token}
+    supabase.table("shopify_sessions").upsert(data).execute()
 
 def get_stored_token(shop_url):
     response = supabase.table("shopify_sessions").select("access_token").eq("shop_url", shop_url).execute()
     return response.data[0]['access_token'] if response.data else None
 
-# 3. Access Security Screen
+# 3. Handle Shopify Callback (The "Digital Handshake")
+# This runs BEFORE the password screen to prevent the loop
+query_params = st.query_params
+if "code" in query_params and "shop" in query_params:
+    shop = query_params["shop"]
+    code = query_params["code"]
+    
+    # Exchange code for permanent access token
+    try:
+        api_key = st.secrets["SHOPIFY_API_KEY"]
+        api_secret = st.secrets["SHOPIFY_API_SECRET"]
+        
+        # Request permanent token
+        conn = requests.post(
+            f"https://{shop}/admin/oauth/access_token",
+            json={"client_id": api_key, "client_secret": api_secret, "code": code}
+        )
+        access_token = conn.json().get("access_token")
+        
+        if access_token:
+            save_token(shop, access_token)
+            st.session_state["token"] = access_token
+            st.session_state["authenticated"] = True
+            st.success("Successfully connected to Shopify!")
+            st.query_params.clear() # Clean URL
+            st.rerun()
+    except Exception as e:
+        st.error(f"Auth failed: {e}")
+
+# 4. Access Security Screen
 if "authenticated" not in st.session_state:
     st.title("🔒 Urbannue Pro Login")
-    col1, col2 = st.columns([1, 2])
+    col1, _ = st.columns([1, 2])
     with col1:
         pwd = st.text_input("Enter your Private Access Code", type="password")
         if st.button("Unlock Dashboard"):
@@ -45,57 +77,50 @@ if "authenticated" not in st.session_state:
                 st.session_state["authenticated"] = True
                 st.rerun()
             else:
-                st.error("Invalid Code. Please contact Urbannue Support.")
+                st.error("Invalid Code.")
     st.stop()
 
-# 4. Main Product Layout
+# 5. Main Product Layout
 st.title("🏆 Urbannue Pro | Business Intelligence")
 
 with st.sidebar:
     st.header("Store Status")
-    shop_url = st.text_input("Enter Store URL", placeholder="your-brand.myshopify.com")
+    shop_input = st.text_input("Enter Store URL", placeholder="your-brand.myshopify.com")
     
-    if shop_url:
-        token = get_stored_token(shop_url)
+    if shop_input:
+        token = get_stored_token(shop_input)
         if token:
-            st.success("✅ Store Connected via Vault")
+            st.success("✅ Store Connected")
             st.session_state["token"] = token
         else:
-            st.warning("⚠️ Store not connected.")
+            st.warning("⚠️ Not connected.")
             if st.button("Connect to Shopify"):
                 api_key = st.secrets["SHOPIFY_API_KEY"]
-                # Replace the URL below with your actual deployed Streamlit URL
                 redirect_uri = "https://urbannue-data-pro-n9nzm7h4zeyxuvkqt5lmys.streamlit.app" 
-                install_url = f"https://{shop_url}/admin/oauth/authorize?client_id={api_key}&scope=read_orders,read_products&redirect_uri={redirect_uri}"
-                st.markdown(f"[Click here to authorize Urbannue]({install_url})")
+                install_url = f"https://{shop_input}/admin/oauth/authorize?client_id={api_key}&scope=read_orders,read_products&redirect_uri={redirect_uri}"
+                st.markdown(f"**[Authorize Urbannue Now]({install_url})**")
 
-# 5. The AI Consultant Interface
+# 6. AI Consultant Interface
 st.divider()
 
 if "token" in st.session_state:
-    st.subheader(f"Analyzing: {shop_url}")
+    st.subheader(f"Analyzing: {shop_input}")
     
-    # KPIs (Mock data for now - will be replaced by API calls)
-    kpi1, kpi2, kpi3 = st.columns(3)
-    kpi1.metric("Live Orders", "1,240", "+12%")
-    kpi2.metric("Revenue (MTD)", "₹4,52,000", "+8%")
-    kpi3.metric("AI Confidence", "98%", "Optimal")
+    # KPIs (Example View)
+    k1, k2, k3 = st.columns(3)
+    k1.metric("Live Orders", "1,240", "Optimal")
+    k2.metric("Revenue", "₹4,52,000", "+8%")
+    k3.metric("AI Confidence", "98%")
 
-    query = st.chat_input("Ask your business consultant about your sales trends...")
+    query = st.chat_input("Ask about your sales trends...")
 
     if query:
         genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
         model = genai.GenerativeModel('gemini-3-flash-preview')
         
-        with st.status("Consulting AI Engine...", expanded=True) as status:
-            st.write("Fetching Shopify order data...")
-            st.write("Applying Business Analyst logic...")
-            
-            # System prompt to ensure premium insights
-            full_prompt = f"Context: Shopify Store {shop_url}. Task: {query}. Output professional BA insights with charts."
+        with st.status("Consulting Engine...", expanded=True):
+            full_prompt = f"Shopify Store {shop_input}. Request: {query}. Output professional analyst insights."
             response = model.generate_content(full_prompt)
-            
             st.markdown(response.text)
-            status.update(label="Analysis Complete!", state="complete", expanded=False)
 else:
-    st.info("Please enter your store URL in the sidebar to begin the analysis.")
+    st.info("Enter your store URL in the sidebar to begin.")
