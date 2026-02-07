@@ -4,6 +4,7 @@ import google.generativeai as genai
 from supabase import create_client, Client
 import shopify
 import requests
+from urllib.parse import urlparse
 
 # 1. Page Configuration
 st.set_page_config(page_title="Urbannue Pro | Intelligence", layout="wide")
@@ -30,32 +31,47 @@ def save_token(shop, token):
     supabase.table("shopify_sessions").upsert(data).execute()
 
 def get_stored_token(shop_url):
-    response = supabase.table("shopify_sessions").select("access_token").eq("shop_url", shop_url).execute()
+    # Clean the URL to match stored format
+    clean_url = shop_url.replace("https://", "").replace("http://", "").strip("/")
+    response = supabase.table("shopify_sessions").select("access_token").eq("shop_url", clean_url).execute()
     return response.data[0]['access_token'] if response.data else None
 
-# 3. Shopify OAuth Callback Logic
+# 3. Handle Shopify OAuth Callback (The Handshake)
 query_params = st.query_params
 if "code" in query_params and "shop" in query_params:
     shop = query_params["shop"]
     code = query_params["code"]
+    
+    # Clean the shop domain for the API call
+    clean_shop = shop.replace("https://", "").replace("http://", "").strip("/")
+    
     try:
-        conn = requests.post(
-            f"https://{shop}/admin/oauth/access_token",
-            json={
-                "client_id": st.secrets["SHOPIFY_API_KEY"], 
-                "client_secret": st.secrets["SHOPIFY_API_SECRET"], 
-                "code": code
-            }
-        )
-        access_token = conn.json().get("access_token")
+        # Step 4: Exchange code for permanent token
+        token_url = f"https://{clean_shop}/admin/oauth/access_token"
+        payload = {
+            "client_id": st.secrets["SHOPIFY_API_KEY"], 
+            "client_secret": st.secrets["SHOPIFY_API_SECRET"], 
+            "code": code
+        }
+        
+        # Use a real POST request to get the token
+        res = requests.post(token_url, json=payload, timeout=15)
+        res_data = res.json()
+        
+        access_token = res_data.get("access_token")
+        
         if access_token:
-            save_token(shop, access_token)
+            save_token(clean_shop, access_token)
             st.session_state["token"] = access_token
             st.session_state["authenticated"] = True
             st.query_params.clear()
+            st.success("Token secured! Reloading...")
             st.rerun()
+        else:
+            st.error(f"Failed to get token: {res_data.get('errors')}")
+            
     except Exception as e:
-        st.error(f"Auth failed: {e}")
+        st.error(f"Handshake Network Error: {e}")
 
 # 4. Access Security
 if "authenticated" not in st.session_state:
@@ -71,35 +87,29 @@ if "authenticated" not in st.session_state:
                 st.error("Invalid Code.")
     st.stop()
 
-# 5. Dashboard Layout & Sidebar
+# 5. Dashboard Layout
 st.title("🏆 Urbannue Pro | Business Intelligence")
 
 with st.sidebar:
     st.header("Store Status")
-    shop_input = st.text_input("Enter Store URL", placeholder="brand.myshopify.com")
+    raw_url = st.text_input("Enter Store URL", placeholder="brand.myshopify.com")
+    # Auto-clean input
+    shop_input = raw_url.replace("https://", "").replace("http://", "").strip("/")
     
     if shop_input:
         token = get_stored_token(shop_input)
         
-        # Scenario: Token exists but permission might be old/missing
         if token:
-            st.success("✅ Store Linked")
+            st.success("✅ Connected")
             st.session_state["token"] = token
-            
-            st.write("---")
-            st.write("💡 **Fixing 'Permission Denied'?**")
-            if st.button("Reset & Re-authorize"):
-                # Clear the token from session so the "Connect" button reappears
+            if st.button("Reset / Update Permissions"):
                 if "token" in st.session_state:
                     del st.session_state["token"]
                 st.rerun()
-        
-        # Scenario: No token (or just clicked Reset)
-        if "token" not in st.session_state:
-            st.warning("⚠️ Permission Required")
+        else:
+            st.warning("⚠️ Auth Needed")
             if st.button("Connect to Shopify"):
                 api_key = st.secrets["SHOPIFY_API_KEY"]
-                # CRITICAL: This is the specific list of permissions
                 scopes = "read_orders,read_products,read_customers"
                 redirect_uri = "https://urbannue-data-pro-n9nzm7h4zeyxuvkqt5lmys.streamlit.app" 
                 install_url = f"https://{shop_input}/admin/oauth/authorize?client_id={api_key}&scope={scopes}&redirect_uri={redirect_uri}"
@@ -112,38 +122,43 @@ if "token" in st.session_state:
     st.subheader(f"Analyzing: {shop_input}")
     
     try:
-        session = shopify.Session(shop_input, "2024-01", st.session_state["token"])
+        # Initialize Shopify Session
+        session = shopify.Session(shop_input, "2024-04", st.session_state["token"])
         shopify.ShopifyResource.activate_session(session)
-        orders = shopify.Order.find(limit=50)
+        
+        # Fetch Orders
+        orders = shopify.Order.find(limit=50, status="any")
         shopify.ShopifyResource.clear_session()
         
         if orders:
             order_list = [{"ID": o.name, "Total": float(o.total_price), "Date": o.created_at} for o in orders]
             df = pd.DataFrame(order_list)
 
-            k1, k2, k3 = st.columns(3)
-            k1.metric("Orders Found", len(df))
-            k2.metric("Total Revenue", f"₹{df['Total'].sum():,.2f}")
-            k3.metric("Avg Value", f"₹{df['Total'].mean():,.2f}")
+            # Dashboard Visuals
+            m1, m2, m3 = st.columns(3)
+            m1.metric("Orders", len(df))
+            m2.metric("Revenue", f"₹{df['Total'].sum():,.2f}")
+            m3.metric("AOV", f"₹{df['Total'].mean():,.2f}")
 
-            st.write("### 📦 Live Order Data")
+            st.write("### 📦 Live Store Data")
             st.dataframe(df, use_container_width=True)
 
-            query = st.chat_input("Ask about your sales trends...")
+            # AI Logic
+            query = st.chat_input("Ask about your sales...")
             if query:
                 genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
                 model = genai.GenerativeModel('gemini-3-flash-preview')
-                with st.status("AI Analyzing Data...", expanded=True):
-                    context = f"Store: {shop_input}. Data: {df.to_json(orient='records')}"
-                    response = model.generate_content(f"{context}\n\nUser Question: {query}")
+                with st.status("Consulting Engine..."):
+                    context = f"Data: {df.to_json(orient='records')}"
+                    response = model.generate_content(f"{context}\n\nUser: {query}")
                     st.markdown(response.text)
         else:
-            st.info("The store is connected, but I couldn't find any orders. Ensure your test orders are marked as 'Paid'.")
+            st.info("Connection successful, but no orders were found. Create a 'Paid' order in Shopify to test.")
             
     except Exception as e:
         if "403" in str(e):
-            st.error("🚨 **Access Denied.** Your current connection doesn't have 'Order' permissions. Please use the **Reset & Re-authorize** button in the sidebar.")
+            st.error("Permission Error: Please use the Reset button in the sidebar.")
         else:
-            st.error(f"Error: {e}")
+            st.error(f"Analysis Error: {e}")
 else:
-    st.info("Please link your store in the sidebar to begin.")
+    st.info("Link your store to start the intelligence engine.")
