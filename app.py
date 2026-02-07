@@ -16,7 +16,7 @@ if not gemini_key:
 if uploaded_file and gemini_key:
     # Configure Gemini
     genai.configure(api_key=gemini_key)
-    model = genai.GenerativeModel('gemini-1.5-flash')
+    model = genai.GenerativeModel('gemini-3-flash-preview')
     
     df = pd.read_csv(uploaded_file)
     st.success("Data Loaded!")
