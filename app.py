@@ -2,51 +2,39 @@ import streamlit as st
 import pandas as pd
 import google.generativeai as genai
 
-st.set_page_config(page_title="Urbannue Data Insights", layout="wide")
-st.title("📊 Urbannue: Shopify Data (Gemini Edition)")
+# 1. Page Config & Theme
+st.set_page_config(page_title="Urbannue Pro | Intelligence", layout="wide")
+
+# 2. Access Security
+if "authenticated" not in st.session_state:
+    st.title("🔒 Urbannue Pro Access")
+    pwd = st.text_input("Enter Access Code", type="password")
+    if pwd == st.secrets["ACCESS_PASSWORD"]:
+        st.session_state["authenticated"] = True
+        st.rerun()
+    else:
+        st.stop()
+
+# 3. Main Product Interface
+st.title("🏆 Urbannue Pro | Business Intelligence")
 
 with st.sidebar:
-    st.header("Settings")
-    gemini_key = st.text_input("Enter Gemini API Key", type="password")
-    uploaded_file = st.file_uploader("Upload Shopify Orders CSV", type="csv")
+    st.image("https://via.placeholder.com/150?text=Urbannue") # Replace with your logo later
+    st.header("Store Connection")
+    shop_url = st.text_input("Shopify Store URL", placeholder="brand-name.myshopify.com")
+    
+    if st.button("Connect Store"):
+        # This is the "Premium" install link
+        api_key = st.secrets["SHOPIFY_API_KEY"]
+        install_url = f"https://{shop_url}/admin/oauth/authorize?client_id={api_key}&scope=read_orders,read_products&redirect_uri={st.secrets.get('REDIRECT_URL', 'https://your-app-name.streamlit.app')}"
+        st.markdown(f"**[Click here to authorize Urbannue]({install_url})**")
 
-if not gemini_key:
-    st.info("Please enter your Gemini API Key from Google AI Studio to begin.")
+# 4. AI Consultant Logic
+st.info("👋 Welcome to Urbannue. Upload your latest sales data or connect via API above.")
+query = st.chat_input("Ask your business consultant a question...")
 
-if uploaded_file and gemini_key:
-    # Configure Gemini
-    genai.configure(api_key=gemini_key)
+if query:
+    genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
     model = genai.GenerativeModel('gemini-3-flash-preview')
-    
-    df = pd.read_csv(uploaded_file)
-    st.success("Data Loaded!")
-    
-    with st.expander("View Data Preview"):
-        st.dataframe(df.head(5))
-
-    query = st.text_input("Ask a business question about your orders:")
-
-    if query:
-        # System Prompt for the BA logic
-        prompt = f"""
-        You are a Shopify Data Analyst. 
-        Dataset Columns: {list(df.columns)}
-        
-        Question: {query}
-        
-        Task: Write ONLY the Python code using pandas to answer this. 
-        - Use the variable 'df'.
-        - Do not explain the code.
-        - If the user asks for a chart, use streamlit's 'st.bar_chart' or 'st.line_chart'.
-        - For text answers, use 'st.write()'.
-        """
-        
-        try:
-            response = model.generate_content(prompt)
-            # Clean the code (remove markdown backticks)
-            code = response.text.replace("```python", "").replace("```", "").strip()
-            
-            st.write("### Analysis:")
-            exec(code)
-        except Exception as e:
-            st.error(f"Analysis failed. Error: {e}")
+    st.write(f"Analyzing data for: *{query}*...")
+    # Your existing AI logic follows here...
