@@ -65,7 +65,7 @@ with st.sidebar:
             if st.button("Connect to Shopify"):
                 api_key = st.secrets["SHOPIFY_API_KEY"]
                 # Replace the URL below with your actual deployed Streamlit URL
-                redirect_uri = "https://your-app-name.streamlit.app" 
+                redirect_uri = "https://urbannue-data-pro-n9nzm7h4zeyxuvkqt5lmys.streamlit.app" 
                 install_url = f"https://{shop_url}/admin/oauth/authorize?client_id={api_key}&scope=read_orders,read_products&redirect_uri={redirect_uri}"
                 st.markdown(f"[Click here to authorize Urbannue]({install_url})")
 
