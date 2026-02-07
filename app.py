@@ -37,31 +37,24 @@ def get_stored_token(shop_url):
     response = supabase.table("shopify_sessions").select("access_token").eq("shop_url", shop_url).execute()
     return response.data[0]['access_token'] if response.data else None
 
-# 3. Handle Shopify Callback (The "Digital Handshake")
-# This runs BEFORE the password screen to prevent the loop
+# 3. Handle Shopify Callback
 query_params = st.query_params
 if "code" in query_params and "shop" in query_params:
     shop = query_params["shop"]
     code = query_params["code"]
-    
-    # Exchange code for permanent access token
     try:
         api_key = st.secrets["SHOPIFY_API_KEY"]
         api_secret = st.secrets["SHOPIFY_API_SECRET"]
-        
-        # Request permanent token
         conn = requests.post(
             f"https://{shop}/admin/oauth/access_token",
             json={"client_id": api_key, "client_secret": api_secret, "code": code}
         )
         access_token = conn.json().get("access_token")
-        
         if access_token:
             save_token(shop, access_token)
             st.session_state["token"] = access_token
             st.session_state["authenticated"] = True
-            st.success("Successfully connected to Shopify!")
-            st.query_params.clear() # Clean URL
+            st.query_params.clear()
             st.rerun()
     except Exception as e:
         st.error(f"Auth failed: {e}")
@@ -100,27 +93,63 @@ with st.sidebar:
                 install_url = f"https://{shop_input}/admin/oauth/authorize?client_id={api_key}&scope=read_orders,read_products&redirect_uri={redirect_uri}"
                 st.markdown(f"**[Authorize Urbannue Now]({install_url})**")
 
-# 6. AI Consultant Interface
+# 6. Real-Time Data Analysis Logic
 st.divider()
 
 if "token" in st.session_state:
-    st.subheader(f"Analyzing: {shop_input}")
+    st.subheader(f"Analyzing Live Data: {shop_input}")
     
-    # KPIs (Example View)
-    k1, k2, k3 = st.columns(3)
-    k1.metric("Live Orders", "1,240", "Optimal")
-    k2.metric("Revenue", "₹4,52,000", "+8%")
-    k3.metric("AI Confidence", "98%")
-
-    query = st.chat_input("Ask about your sales trends...")
-
-    if query:
-        genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
-        model = genai.GenerativeModel('gemini-3-flash-preview')
+    # FETCH REAL DATA
+    try:
+        session = shopify.Session(shop_input, "2024-01", st.session_state["token"])
+        shopify.ShopifyResource.activate_session(session)
+        orders = shopify.Order.find(limit=50)
+        shopify.ShopifyResource.clear_session()
         
-        with st.status("Consulting Engine...", expanded=True):
-            full_prompt = f"Shopify Store {shop_input}. Request: {query}. Output professional analyst insights."
-            response = model.generate_content(full_prompt)
-            st.markdown(response.text)
+        if orders:
+            # Prepare data for AI and Dashboard
+            order_data = []
+            for o in orders:
+                order_data.append({
+                    "Order ID": o.name,
+                    "Total Price": float(o.total_price),
+                    "Date": o.created_at,
+                    "Items": len(o.line_items)
+                })
+            df = pd.DataFrame(order_data)
+
+            # REAL KPIs
+            k1, k2, k3 = st.columns(3)
+            k1.metric("Total Orders", len(df))
+            k2.metric("Total Revenue", f"₹{df['Total Price'].sum():,.2f}")
+            k3.metric("Avg. Order Value", f"₹{df['Total Price'].mean():,.2f}")
+
+            # SHOW DATA TABLE
+            st.write("### 📦 Recent Order Records")
+            st.dataframe(df, use_container_width=True)
+
+            # AI CONSULTANT
+            query = st.chat_input("Ask about your sales trends...")
+            if query:
+                genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
+                model = genai.GenerativeModel('gemini-3-flash-preview')
+                
+                with st.status("Consulting Engine...", expanded=True):
+                    # CONTEXT: We send the actual JSON of your 4 orders to Gemini
+                    data_json = df.to_json(orient='records')
+                    full_prompt = f"""
+                    You are a Senior Business Analyst for the Shopify store {shop_input}.
+                    Here is the ACTUAL order data from the store: {data_json}
+                    
+                    User Request: {query}
+                    
+                    Please provide a professional, data-driven response. If the data is limited, explain what the current trends suggest.
+                    """
+                    response = model.generate_content(full_prompt)
+                    st.markdown(response.text)
+        else:
+            st.info("No orders found in this store yet. Please create a few test orders in Shopify Admin.")
+    except Exception as e:
+        st.error(f"Data Fetch Error: {e}")
 else:
     st.info("Enter your store URL in the sidebar to begin.")
