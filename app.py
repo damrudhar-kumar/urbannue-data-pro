@@ -85,12 +85,17 @@ with st.sidebar:
         if token:
             st.success("✅ Store Connected")
             st.session_state["token"] = token
+            if st.button("Re-connect / Update Permissions"):
+                st.session_state.pop("token")
+                st.rerun()
         else:
-            st.warning("⚠️ Not connected.")
+            st.warning("⚠️ Permission Needed.")
             if st.button("Connect to Shopify"):
                 api_key = st.secrets["SHOPIFY_API_KEY"]
+                # CRITICAL: Added 'read_orders' to the scope here
+                scopes = "read_orders,read_products"
                 redirect_uri = "https://urbannue-data-pro-n9nzm7h4zeyxuvkqt5lmys.streamlit.app" 
-                install_url = f"https://{shop_input}/admin/oauth/authorize?client_id={api_key}&scope=read_orders,read_products&redirect_uri={redirect_uri}"
+                install_url = f"https://{shop_input}/admin/oauth/authorize?client_id={api_key}&scope={scopes}&redirect_uri={redirect_uri}"
                 st.markdown(f"**[Authorize Urbannue Now]({install_url})**")
 
 # 6. Real-Time Data Analysis Logic
@@ -99,7 +104,6 @@ st.divider()
 if "token" in st.session_state:
     st.subheader(f"Analyzing Live Data: {shop_input}")
     
-    # FETCH REAL DATA
     try:
         session = shopify.Session(shop_input, "2024-01", st.session_state["token"])
         shopify.ShopifyResource.activate_session(session)
@@ -107,7 +111,6 @@ if "token" in st.session_state:
         shopify.ShopifyResource.clear_session()
         
         if orders:
-            # Prepare data for AI and Dashboard
             order_data = []
             for o in orders:
                 order_data.append({
@@ -118,38 +121,30 @@ if "token" in st.session_state:
                 })
             df = pd.DataFrame(order_data)
 
-            # REAL KPIs
             k1, k2, k3 = st.columns(3)
             k1.metric("Total Orders", len(df))
             k2.metric("Total Revenue", f"₹{df['Total Price'].sum():,.2f}")
             k3.metric("Avg. Order Value", f"₹{df['Total Price'].mean():,.2f}")
 
-            # SHOW DATA TABLE
             st.write("### 📦 Recent Order Records")
             st.dataframe(df, use_container_width=True)
 
-            # AI CONSULTANT
             query = st.chat_input("Ask about your sales trends...")
             if query:
                 genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
                 model = genai.GenerativeModel('gemini-3-flash-preview')
                 
                 with st.status("Consulting Engine...", expanded=True):
-                    # CONTEXT: We send the actual JSON of your 4 orders to Gemini
                     data_json = df.to_json(orient='records')
-                    full_prompt = f"""
-                    You are a Senior Business Analyst for the Shopify store {shop_input}.
-                    Here is the ACTUAL order data from the store: {data_json}
-                    
-                    User Request: {query}
-                    
-                    Please provide a professional, data-driven response. If the data is limited, explain what the current trends suggest.
-                    """
+                    full_prompt = f"Store: {shop_input}. Data: {data_json}. Request: {query}. Act as a Senior Business Analyst."
                     response = model.generate_content(full_prompt)
                     st.markdown(response.text)
         else:
-            st.info("No orders found in this store yet. Please create a few test orders in Shopify Admin.")
+            st.info("No orders found. Ensure your test orders are 'Paid' and not 'Drafts'.")
     except Exception as e:
-        st.error(f"Data Fetch Error: {e}")
+        if "403" in str(e):
+            st.error("🚨 Permission Denied: You need to click 'Connect to Shopify' again to approve Order access.")
+        else:
+            st.error(f"Data Fetch Error: {e}")
 else:
     st.info("Enter your store URL in the sidebar to begin.")
