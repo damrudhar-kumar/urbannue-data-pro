@@ -116,22 +116,35 @@ with st.sidebar:
                 st.markdown(f"**[Click here to Authorize Urbannue]({install_url})**")
 
 # 6. Analysis Engine
+# 6. Analysis Engine
 st.divider()
 
 if "token" in st.session_state:
-    st.subheader(f"Analyzing: {shop_input}")
+    # --- CRITICAL URL CLEANING START ---
+    # This removes https://, slashes, and spaces to prevent Errno -2
+    clean_domain = shop_input.replace("https://", "").replace("http://", "").strip().split('/')[0]
+    # --- CRITICAL URL CLEANING END ---
+
+    st.subheader(f"Analyzing: {clean_domain}")
     
     try:
-        # Initialize Shopify Session
-        session = shopify.Session(shop_input, "2024-04", st.session_state["token"])
+        # Initialize Shopify Session with the CLEAN domain
+        session = shopify.Session(clean_domain, "2024-04", st.session_state["token"])
         shopify.ShopifyResource.activate_session(session)
         
-        # Fetch Orders
+        # Fetch Orders (using 'any' status to catch your fake orders)
         orders = shopify.Order.find(limit=50, status="any")
         shopify.ShopifyResource.clear_session()
         
         if orders:
-            order_list = [{"ID": o.name, "Total": float(o.total_price), "Date": o.created_at} for o in orders]
+            order_list = []
+            for o in orders:
+                order_list.append({
+                    "ID": o.name, 
+                    "Total": float(o.total_price), 
+                    "Date": o.created_at,
+                    "Status": o.financial_status
+                })
             df = pd.DataFrame(order_list)
 
             # Dashboard Visuals
@@ -148,17 +161,16 @@ if "token" in st.session_state:
             if query:
                 genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
                 model = genai.GenerativeModel('gemini-3-flash-preview')
-                with st.status("Consulting Engine..."):
-                    context = f"Data: {df.to_json(orient='records')}"
-                    response = model.generate_content(f"{context}\n\nUser: {query}")
+                with st.status("AI Analyzing Data..."):
+                    context = f"Store: {clean_domain}. Data: {df.to_json(orient='records')}"
+                    response = model.generate_content(f"{context}\n\nUser Question: {query}")
                     st.markdown(response.text)
         else:
-            st.info("Connection successful, but no orders were found. Create a 'Paid' order in Shopify to test.")
+            st.info(f"Connected to {clean_domain}, but no orders were found. Check if your test orders are archived.")
             
     except Exception as e:
         if "403" in str(e):
-            st.error("Permission Error: Please use the Reset button in the sidebar.")
+            st.error("🚨 Permission Denied. Use the 'Reset' button in the sidebar to update permissions.")
         else:
-            st.error(f"Analysis Error: {e}")
-else:
-    st.info("Link your store to start the intelligence engine.")
+            # This will now show exactly what domain it failed on
+            st.error(f"Analysis Error on {clean_domain}: {e}")
