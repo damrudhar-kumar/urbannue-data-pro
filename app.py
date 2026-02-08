@@ -31,7 +31,8 @@ def get_stored_token(shop_url):
     except:
         return None
 
-# 3. Handle Shopify OAuth Callback
+# 3. Handle Shopify OAuth Callback (Handshake)
+# This MUST stay above the password lock
 query_params = st.query_params
 if "code" in query_params and "shop" in query_params:
     shop = clean_url(query_params["shop"])
@@ -48,20 +49,22 @@ if "code" in query_params and "shop" in query_params:
             save_token(shop, access_token)
             st.session_state["token"] = access_token
             st.query_params.clear()
-            st.success("Permissions Approved! Loading Dashboard...")
+            st.success("Access Approved! Redirecting to Login...")
             time.sleep(1)
             st.rerun()
     except Exception as e:
-        st.error(f"Handshake Error: {e}")
+        st.error(f"Handshake Failed: {e}")
 
-# 4. Access Security
+# 4. Access Security (Password Lock)
 if "authenticated" not in st.session_state:
     st.title("🔒 Urbannue Pro Login")
     pwd = st.text_input("Enter Access Code", type="password")
-    if st.button("Unlock"):
+    if st.button("Unlock Dashboard"):
         if pwd == st.secrets["ACCESS_PASSWORD"]:
             st.session_state["authenticated"] = True
             st.rerun()
+        else:
+            st.error("Invalid Code.")
     st.stop()
 
 # 5. Dashboard Sidebar
@@ -78,19 +81,19 @@ with st.sidebar:
 
         if "token" in st.session_state:
             st.success(f"✅ {shop_input} Linked")
-            if st.button("Force Disconnect (Clear DB)"):
+            if st.button("Force Reset (Clear Connection)"):
                 supabase.table("shopify_sessions").delete().eq("shop_url", shop_input).execute()
                 if "token" in st.session_state: del st.session_state["token"]
                 st.rerun()
         else:
-            st.warning("⚠️ Permission Needed")
-            if st.button("Connect & Approve Orders"):
+            st.warning("⚠️ Action Required")
+            if st.button("Authorize Order Access"):
                 api_key = st.secrets["SHOPIFY_API_KEY"]
-                scopes = "read_orders,read_products"
+                scopes = "read_orders,read_products,read_customers"
                 redirect_uri = "https://urbannue-data-pro-n9nzm7h4zeyxuvkqt5lmys.streamlit.app"
-                # Added timestamp to force a fresh login screen
+                # Timestamp forces a fresh install screen
                 auth_url = f"https://{shop_input}/admin/oauth/authorize?client_id={api_key}&scope={scopes}&redirect_uri={redirect_uri}&state={int(time.time())}"
-                st.markdown(f"**[Step 2: Click to Authorize Orders]({auth_url})**")
+                st.markdown(f"**[Click here to Grant Access]({auth_url})**")
 
 # 6. Analysis Engine
 st.divider()
@@ -98,19 +101,22 @@ if "token" in st.session_state and shop_input:
     try:
         session = shopify.Session(shop_input, "2024-04", st.session_state["token"])
         shopify.ShopifyResource.activate_session(session)
+        # Pull orders with 'any' status to catch test data
         orders = shopify.Order.find(limit=50, status="any")
         shopify.ShopifyResource.clear_session()
         
         if orders:
             df = pd.DataFrame([{"ID": o.name, "Total": float(o.total_price), "Date": o.created_at} for o in orders])
             c1, c2, c3 = st.columns(3)
-            c1.metric("Total Orders", len(df))
+            c1.metric("Orders", len(df))
             c2.metric("Revenue", f"₹{df['Total'].sum():,.2f}")
             c3.metric("AOV", f"₹{df['Total'].mean():,.2f}")
             st.dataframe(df, use_container_width=True)
         else:
-            st.info("No orders found. Please create a 'Paid' order in Shopify.")
+            st.info("Connected! No orders found yet. Create a 'Paid' order in Shopify Admin to test.")
     except Exception as e:
-        st.error(f"System Error: {e}")
         if "403" in str(e):
-            st.warning("This key does not have Order access. Please use the 'Force Disconnect' button above and re-authorize.")
+            st.error("🚨 403 Forbidden: Your token does not have 'Order' access.")
+            st.write("To fix: Uninstall the app in Shopify Admin, click 'Force Reset' in the sidebar, and re-authorize.")
+        else:
+            st.error(f"System Error: {e}")
